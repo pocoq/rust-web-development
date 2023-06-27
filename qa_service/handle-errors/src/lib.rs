@@ -1,4 +1,5 @@
 use reqwest::Error as ReqwestError;
+use reqwest_middleware::Error as MiddlewareReqwestError;
 use tracing::{event, instrument, Level};
 use warp::{
     filters::{body::BodyDeserializeError, cors::CorsForbidden},
@@ -12,7 +13,8 @@ pub enum Error {
     ParseError(std::num::ParseIntError),
     MissingParameters,
     DatabaseQueryError,
-    ExternalAPIError(ReqwestError),
+    ReqwestAPIError(ReqwestError),
+    MiddlewareReqwestAPIError(MiddlewareReqwestError),
     ClientError(APILayerError),
     ServerError(APILayerError),
 }
@@ -37,8 +39,11 @@ impl std::fmt::Display for Error {
             Error::DatabaseQueryError => {
                 write!(f, "Cannot update, invalid data")
             }
-            Error::ExternalAPIError(err) => {
-                write!(f, "Cannot execute: {}", err)
+            Error::ReqwestAPIError(err) => {
+                write!(f, "External API error: {}", err)
+            }
+            Error::MiddlewareReqwestAPIError(err) => {
+                write!(f, "External API error: {}", err)
             }
             Error::ClientError(err) => {
                 write!(f, "External client error: {}", err)
@@ -61,7 +66,13 @@ pub async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
             crate::Error::DatabaseQueryError.to_string(),
             StatusCode::UNPROCESSABLE_ENTITY,
         ))
-    } else if let Some(crate::Error::ExternalAPIError(e)) = r.find() {
+    } else if let Some(crate::Error::ReqwestAPIError(e)) = r.find() {
+        event!(Level::ERROR, "{}", e);
+        Ok(warp::reply::with_status(
+            "Internal server error".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    } else if let Some(crate::Error::MiddlewareReqwestAPIError(e)) = r.find() {
         event!(Level::ERROR, "{}", e);
         Ok(warp::reply::with_status(
             "Internal server error".to_string(),
