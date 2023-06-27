@@ -9,7 +9,7 @@ pub struct Question {
 }
 
 #[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct QuestionId(pub String);
+pub struct QuestionId(pub i32);
 
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

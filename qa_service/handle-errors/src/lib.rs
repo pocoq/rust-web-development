@@ -1,3 +1,4 @@
+use reqwest::Error as ReqwestError;
 use tracing::{event, instrument, Level};
 use warp::{
     filters::{body::BodyDeserializeError, cors::CorsForbidden},
@@ -11,8 +12,21 @@ pub enum Error {
     ParseError(std::num::ParseIntError),
     MissingParameters,
     DatabaseQueryError,
+    ExternalAPIError(ReqwestError),
+    ClientError(APILayerError),
+    ServerError(APILayerError),
+}
+#[derive(Debug, Clone)]
+pub struct APILayerError {
+    pub status: u16,
+    pub message: String,
 }
 
+impl std::fmt::Display for APILayerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Status: {}, Message: {}", self.status, self.message)
+    }
+}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &*self {
@@ -23,11 +37,21 @@ impl std::fmt::Display for Error {
             Error::DatabaseQueryError => {
                 write!(f, "Cannot update, invalid data")
             }
+            Error::ExternalAPIError(err) => {
+                write!(f, "Cannot execute: {}", err)
+            }
+            Error::ClientError(err) => {
+                write!(f, "External client error: {}", err)
+            }
+            Error::ServerError(err) => {
+                write!(f, "External server error: {}", err)
+            }
         }
     }
 }
 
 impl Reject for Error {}
+impl Reject for APILayerError {}
 
 #[instrument]
 pub async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
@@ -36,6 +60,24 @@ pub async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
         Ok(warp::reply::with_status(
             crate::Error::DatabaseQueryError.to_string(),
             StatusCode::UNPROCESSABLE_ENTITY,
+        ))
+    } else if let Some(crate::Error::ExternalAPIError(e)) = r.find() {
+        event!(Level::ERROR, "{}", e);
+        Ok(warp::reply::with_status(
+            "Internal server error".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    } else if let Some(crate::Error::ClientError(e)) = r.find() {
+        event!(Level::ERROR, "{}", e);
+        Ok(warp::reply::with_status(
+            "Internal Server Error".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    } else if let Some(crate::Error::ServerError(e)) = r.find() {
+        event!(Level::ERROR, "{}", e);
+        Ok(warp::reply::with_status(
+            "Internal Server Error".to_string(),
+            StatusCode::INTERNAL_SERVER_ERROR,
         ))
     } else if let Some(error) = r.find::<CorsForbidden>() {
         event!(Level::ERROR, "CORS forbidden error: {}", error);
