@@ -1,3 +1,4 @@
+use argon2::Error as ArgonError;
 use reqwest::Error as ReqwestError;
 use reqwest_middleware::Error as MiddlewareReqwestError;
 use tracing::{event, instrument, Level};
@@ -12,17 +13,23 @@ use warp::{
 pub enum Error {
     ParseError(std::num::ParseIntError),
     MissingParameters,
-    DatabaseQueryError,
+    DatabaseQueryError(sqlx::Error),
     ReqwestAPIError(ReqwestError),
     MiddlewareReqwestAPIError(MiddlewareReqwestError),
     ClientError(APILayerError),
     ServerError(APILayerError),
+    WrongPassword,
+    ArgonLibraryError(ArgonError),
+    CannotDecryptToken,
+    Unauthorized,
 }
 #[derive(Debug, Clone)]
 pub struct APILayerError {
     pub status: u16,
     pub message: String,
 }
+
+const DUPLICATE_KEY: u32 = 23505;
 
 impl std::fmt::Display for APILayerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,7 +43,19 @@ impl std::fmt::Display for Error {
             Error::ParseError(ref err) => {
                 write!(f, "Cannot parse parameter: {}", err)
             }
-            Error::DatabaseQueryError => {
+            Error::WrongPassword => {
+                write!(f, "Wrong password")
+            }
+            Error::Unauthorized => {
+                write!(f, "No permission to change the underlying resource")
+            }
+            Error::ArgonLibraryError(_) => {
+                write!(f, "Cannot verify password")
+            }
+            Error::CannotDecryptToken => {
+                write!(f, "Cannot decrypt token")
+            }
+            Error::DatabaseQueryError(_) => {
                 write!(f, "Cannot update, invalid data")
             }
             Error::ReqwestAPIError(err) => {
@@ -60,17 +79,50 @@ impl Reject for APILayerError {}
 
 #[instrument]
 pub async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
-    if let Some(crate::Error::DatabaseQueryError) = r.find() {
+    if let Some(crate::Error::DatabaseQueryError(e)) = r.find() {
         event!(Level::ERROR, "Database query error");
-        Ok(warp::reply::with_status(
-            crate::Error::DatabaseQueryError.to_string(),
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ))
+        match e {
+            sqlx::Error::Database(err) => {
+                if err.code().unwrap().parse::<u32>().unwrap() == DUPLICATE_KEY {
+                    Ok(warp::reply::with_status(
+                        "Account already exsists".to_string(),
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                    ))
+                } else {
+                    Ok(warp::reply::with_status(
+                        "Cannot update data".to_string(),
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                    ))
+                }
+            }
+            _ => Ok(warp::reply::with_status(
+                "Cannot update data".to_string(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            )),
+        }
     } else if let Some(crate::Error::ReqwestAPIError(e)) = r.find() {
         event!(Level::ERROR, "{}", e);
         Ok(warp::reply::with_status(
             "Internal server error".to_string(),
             StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    } else if let Some(crate::Error::Unauthorized) = r.find() {
+        event!(Level::ERROR, "Not matching account id");
+        Ok(warp::reply::with_status(
+            "No permission to change underlying resource".to_string(),
+            StatusCode::UNAUTHORIZED,
+        ))
+    } else if let Some(crate::Error::CannotDecryptToken) = r.find() {
+        event!(Level::ERROR, "Cannot decrypt token");
+        Ok(warp::reply::with_status(
+            "Cannot decrypt token".to_string(),
+            StatusCode::UNAUTHORIZED,
+        ))
+    } else if let Some(crate::Error::WrongPassword) = r.find() {
+        event!(Level::ERROR, "Enter wrong password");
+        Ok(warp::reply::with_status(
+            "Wrong email/password combination".to_string(),
+            StatusCode::UNAUTHORIZED,
         ))
     } else if let Some(crate::Error::MiddlewareReqwestAPIError(e)) = r.find() {
         event!(Level::ERROR, "{}", e);
@@ -109,7 +161,7 @@ pub async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
             StatusCode::UNPROCESSABLE_ENTITY,
         ))
     } else {
-        event!(Level::WARN, "Requested route was not found");
+        event!(Level::WARN, "Requested route was not found 1111");
         Ok(warp::reply::with_status(
             "Route not found".to_string(),
             StatusCode::NOT_FOUND,
