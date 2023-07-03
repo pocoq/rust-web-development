@@ -1,0 +1,5 @@
+port = 3030
+db_port = 5432
+db_name = "rustwebdev"
+db_host = "localhost"
+log_level = "warn"

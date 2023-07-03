@@ -22,6 +22,7 @@ pub enum Error {
     ArgonLibraryError(ArgonError),
     CannotDecryptToken,
     Unauthorized,
+    MigrationError(sqlx::migrate::MigrateError),
 }
 #[derive(Debug, Clone)]
 pub struct APILayerError {
@@ -40,36 +41,17 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &*self {
             Error::MissingParameters => write!(f, "Missing parameters"),
-            Error::ParseError(ref err) => {
-                write!(f, "Cannot parse parameter: {}", err)
-            }
-            Error::WrongPassword => {
-                write!(f, "Wrong password")
-            }
-            Error::Unauthorized => {
-                write!(f, "No permission to change the underlying resource")
-            }
-            Error::ArgonLibraryError(_) => {
-                write!(f, "Cannot verify password")
-            }
-            Error::CannotDecryptToken => {
-                write!(f, "Cannot decrypt token")
-            }
-            Error::DatabaseQueryError(_) => {
-                write!(f, "Cannot update, invalid data")
-            }
-            Error::ReqwestAPIError(err) => {
-                write!(f, "External API error: {}", err)
-            }
-            Error::MiddlewareReqwestAPIError(err) => {
-                write!(f, "External API error: {}", err)
-            }
-            Error::ClientError(err) => {
-                write!(f, "External client error: {}", err)
-            }
-            Error::ServerError(err) => {
-                write!(f, "External server error: {}", err)
-            }
+            Error::ParseError(ref err) => write!(f, "Cannot parse parameter: {}", err),
+            Error::WrongPassword => write!(f, "Wrong password"),
+            Error::Unauthorized => write!(f, "No permission to change the underlying resource"),
+            Error::ArgonLibraryError(_) => write!(f, "Cannot verify password"),
+            Error::CannotDecryptToken => write!(f, "Cannot decrypt token"),
+            Error::DatabaseQueryError(_) => write!(f, "Cannot update, invalid data"),
+            Error::MigrationError(_) => write!(f, "Cannot migrate data"),
+            Error::ReqwestAPIError(err) => write!(f, "External API error: {}", err),
+            Error::MiddlewareReqwestAPIError(err) => write!(f, "External API error: {}", err),
+            Error::ClientError(err) => write!(f, "External client error: {}", err),
+            Error::ServerError(err) => write!(f, "External server error: {}", err),
         }
     }
 }
