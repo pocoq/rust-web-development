@@ -1,42 +1,22 @@
 #![warn(clippy::all)]
-use handle_errors::return_error;
-use tracing_subscriber::fmt::format::FmtSpan;
-use warp::{http::Method, Filter};
 
-mod config;
+pub use handle_errors;
+use tokio::sync::{oneshot, oneshot::Sender};
+use tracing_subscriber::fmt::format::FmtSpan;
+use warp::{http::Method, Filter, Reply};
+
+pub mod config;
 mod profanity;
 mod routes;
 mod store;
 mod types;
 
-#[tokio::main]
-async fn main() -> Result<(), handle_errors::Error> {
-    let config = config::Config::new().expect("Config can't be set");
-    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        format!(
-            "handle_errors={}, rust_web_dev={}, warp={}",
-            config.log_level, config.log_level, config.log_level
-        )
-    });
+pub struct OneshotHandler {
+    pub sender: Sender<i32>,
+}
 
-    let store = store::Store::new(&format!(
-        "postgres://{}:{}@{}:{}/{}",
-        config.db_user, config.db_password, config.db_host, config.db_port, config.db_name
-    ))
-    .await;
-    // .map_err(|e| handle_errors::Error::DatabaseQueryError(e))?;
-
-    sqlx::migrate!()
-        .run(&store.clone().connection)
-        .await
-        .map_err(|e| handle_errors::Error::MigrationError(e))?;
-
+async fn build_routes(store: store::Store) -> impl Filter<Extract = impl Reply> + Clone {
     let store_filter = warp::any().map(move || store.clone());
-
-    tracing_subscriber::fmt()
-        .with_env_filter(log_filter)
-        .with_span_events(FmtSpan::CLOSE)
-        .init();
 
     let cors = warp::cors()
         .allow_any_origin()
@@ -97,7 +77,7 @@ async fn main() -> Result<(), handle_errors::Error> {
         .and(warp::body::json())
         .and_then(routes::authentication::login);
 
-    let routes = get_questions
+    get_questions
         .or(update_question)
         .or(add_question)
         .or(delete_question)
@@ -106,9 +86,53 @@ async fn main() -> Result<(), handle_errors::Error> {
         .or(login)
         .with(cors)
         .with(warp::trace::request())
-        .recover(return_error);
+        .recover(handle_errors::return_error)
+}
 
-    tracing::info!("Q&A service build ID {}", env!("RUST_WEB_DEV_VERSION"));
-    warp::serve(routes).run(([127, 0, 0, 1], config.port)).await;
-    Ok(())
+pub async fn setup_store(config: &config::Config) -> Result<store::Store, handle_errors::Error> {
+    let store = store::Store::new(&format!(
+        "postgres://{}:{}@{}:{}/{}",
+        config.db_user, config.db_password, config.db_host, config.db_port, config.db_name
+    ))
+    .await;
+    // .map_err(handle_errors::Error::DatabaseQueryError)?;
+
+    sqlx::migrate!()
+        .run(&store.clone().connection)
+        .await
+        .map_err(handle_errors::Error::MigrationError)?;
+
+    let log_filter = format!(
+        "handle_errors={},qa_service_dev={},warp={}",
+        config.log_level, config.log_level, config.log_level
+    );
+
+    tracing_subscriber::fmt()
+        // Use the filter we built above to determine which traces to record.
+        .with_env_filter(log_filter)
+        // Record an event when each span closes. This can be used to time our
+        // routes' durations!
+        .with_span_events(FmtSpan::CLOSE)
+        .init();
+
+    Ok(store)
+}
+
+pub async fn run(config: config::Config, store: store::Store) {
+    let routes = build_routes(store).await;
+    warp::serve(routes).run(([0, 0, 0, 0], config.port)).await;
+}
+
+pub async fn oneshot(store: store::Store) -> OneshotHandler {
+    let routes = build_routes(store).await;
+    let (tx, rx) = oneshot::channel::<i32>();
+    let socket: std::net::SocketAddr = "127.0.0.1:3030"
+        .to_string()
+        .parse()
+        .expect("Not a valid address");
+    let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(socket, async {
+        rx.await.ok();
+    });
+    tokio::task::spawn(server);
+    OneshotHandler { sender: tx }
 }

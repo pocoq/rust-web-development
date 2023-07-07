@@ -53,7 +53,7 @@ pub async fn add_question(
     };
 
     match store.add_question(question, account_id).await {
-        Ok(_) => Ok(warp::reply::with_status("Question added", StatusCode::OK)),
+        Ok(res) => Ok(warp::reply::json(&res)),
         Err(e) => Err(warp::reject::custom(e)),
     }
 }

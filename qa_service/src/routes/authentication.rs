@@ -1,8 +1,8 @@
-use std::{env, future};
 use argon2::{self, Config};
 use chrono::prelude::*;
 use rand::Rng;
-use warp::{http::StatusCode, Filter};
+use std::{env, future};
+use warp::Filter;
 
 use crate::{
     store::Store,
@@ -18,7 +18,7 @@ pub async fn register(store: Store, account: Account) -> Result<impl warp::Reply
     };
 
     match store.add_account(account).await {
-        Ok(_) => Ok(warp::reply::with_status("Account added", StatusCode::OK)),
+        Ok(_) => Ok(warp::reply::json(&"Account added".to_string())),
         Err(e) => Err(warp::reject::custom(e)),
     }
 }
@@ -67,7 +67,7 @@ fn verify_password(hash: &str, password: &[u8]) -> Result<bool, argon2::Error> {
 fn issue_token(account_id: AccountId) -> String {
     let current_date_time = Utc::now();
     let dt = current_date_time + chrono::Duration::days(1);
-	let key = env::var("PASETO_KEY").unwrap();
+    let key = env::var("PASETO_KEY").unwrap();
 
     paseto::tokens::PasetoBuilder::new()
         .set_encryption_key(&Vec::from(key.as_bytes()))
@@ -78,9 +78,8 @@ fn issue_token(account_id: AccountId) -> String {
         .expect("Failed to construct paseto token w/ builder")
 }
 
-
 pub fn verify_token(token: String) -> Result<Session, handle_errors::Error> {
-	let key = env::var("PASETO_KEY").unwrap();
+    let key = env::var("PASETO_KEY").unwrap();
     let token = paseto::tokens::validate_local_token(
         &token,
         None,
@@ -89,4 +88,22 @@ pub fn verify_token(token: String) -> Result<Session, handle_errors::Error> {
     )
     .map_err(|_| handle_errors::Error::CannotDecryptToken)?;
     serde_json::from_value::<Session>(token).map_err(|_| handle_errors::Error::CannotDecryptToken)
+}
+
+#[cfg(test)]
+mod authentication_tests {
+    use super::{auth, env, issue_token, AccountId};
+
+    #[tokio::test]
+    async fn post_question_auth() {
+        env::set_var("PASETO_KEY", "RANDOM WORDS WINTER MACINTOSH PC");
+        let token = issue_token(AccountId(3));
+        let filter = auth();
+
+        let res = warp::test::request()
+            .header("Authorization", token)
+            .filter(&filter);
+
+        assert_eq!(res.await.unwrap().account_id, AccountId(3));
+    }
 }

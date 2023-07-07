@@ -21,7 +21,7 @@ pub fn generate_cargo_keys() {
         }
     };
     println!(
-        "cargo:rustc-env=RUST_WEB_DEV_VERSION={}",
+        "cargo:rustc-env=QA_SERVICE_DEV_VERSION={}",
         get_version(&commit)
     );
 }
